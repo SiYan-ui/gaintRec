@@ -1,0 +1,19 @@
+data:
+  data_root: "data/CASIA-B"
+  skeleton_root: "data/skeletons"
+  seq_len: 30
+  batch_size: 8
+  num_workers: 4
+
+model:
+  num_classes: 74
+  visual_dim: 256
+  skel_dim: 256
+  embed_dim: 256
+
+train:
+  epochs: 100
+  lr: 0.001
+  weight_decay: 0.0005
+  log_interval: 10
+  save_dir: "checkpoints"

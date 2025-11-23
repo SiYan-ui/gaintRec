@@ -1,0 +1,4 @@
+prompt/
+
+*.pyc
+__pycache__/
