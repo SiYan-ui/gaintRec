@@ -1,19 +1,27 @@
+
+experiment:
+  seed: 42
+  output_dir: runs/casia-b-baseline
+
 data:
-  data_root: "data/CASIA-B"
-  skeleton_root: "data/skeletons"
-  seq_len: 30
+  root: data/GaitDatasetB-silh
+  train_ratio: 0.85
+  split_seed: 7
+  frames_per_clip: 30
+  min_frames: 8
+  sampling_strategy: uniform
   batch_size: 8
   num_workers: 4
 
 model:
-  num_classes: 74
-  visual_dim: 256
-  skel_dim: 256
-  embed_dim: 256
+  in_channels: 1
+  frame_feature_dims: [32, 64, 128]
+  pyramid_bins: [1, 2, 4]
+  dropout: 0.3
 
-train:
-  epochs: 100
-  lr: 0.001
-  weight_decay: 0.0005
-  log_interval: 10
-  save_dir: "checkpoints"
+optim:
+  lr: 0.0003
+  weight_decay: 0.0001
+  epochs: 50
+  label_smoothing: 0.0
+

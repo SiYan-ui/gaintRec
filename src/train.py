@@ -1,96 +1,212 @@
-import os
-import yaml
-import argparse
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from dataset import CasiaBDataset
-from model import FusionModel
+"""Training script for CASIA-B silhouette gait recognition."""
+from __future__ import annotations
 
-def train(config_path):
-    # Load Config
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-        
-    # Setup Device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-    
-    # Create Directories
-    os.makedirs(config['train']['save_dir'], exist_ok=True)
-    
-    # Dataset & DataLoader
-    train_dataset = CasiaBDataset(
-        data_root=config['data']['data_root'],
-        skeleton_root=config['data']['skeleton_root'],
-        seq_len=config['data']['seq_len'],
-        mode='train'
-    )
-    
+import argparse
+import json
+import random
+from pathlib import Path
+from typing import Any, Dict, Tuple
+
+import numpy as np
+import torch
+import yaml
+from torch import nn
+from torch.utils.data import DataLoader
+
+from src.data import CasiaBSilhouetteDataset, build_subject_label_map, discover_subject_ids, split_subjects
+from src.model import GaitRecognitionModel
+
+
+def load_config(path: Path) -> Dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    return data
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def prepare_datasets(cfg: Dict[str, Any]) -> Tuple[CasiaBSilhouetteDataset, CasiaBSilhouetteDataset]:
+    data_cfg = cfg.get("data", {})
+    root = Path(data_cfg.get("root", "data/GaitDatasetB-silh")).expanduser()
+    all_subjects = discover_subject_ids(root)
+    if not all_subjects:
+        raise RuntimeError(f"No subject folders discovered under {root}.")
+
+    if data_cfg.get("train_subjects") and data_cfg.get("val_subjects"):
+        train_subjects = [f"{int(s):03d}" for s in data_cfg["train_subjects"]]
+        val_subjects = [f"{int(s):03d}" for s in data_cfg["val_subjects"]]
+    else:
+        train_ratio = float(data_cfg.get("train_ratio", 0.8))
+        seed = int(data_cfg.get("split_seed", 42))
+        train_subjects, val_subjects = split_subjects(all_subjects, train_ratio=train_ratio, seed=seed)
+
+    label_mapping = build_subject_label_map(all_subjects)
+    shared_kwargs = {
+        "root": root,
+        "label_mapping": label_mapping,
+        "frames_per_clip": int(data_cfg.get("frames_per_clip", 30)),
+        "min_frames": int(data_cfg.get("min_frames", 8)),
+        "sampling_strategy": data_cfg.get("sampling_strategy", "uniform"),
+    }
+
+    train_dataset = CasiaBSilhouetteDataset(subjects=train_subjects, **shared_kwargs)
+    val_dataset = CasiaBSilhouetteDataset(subjects=val_subjects, **shared_kwargs)
+    return train_dataset, val_dataset
+
+
+def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, int]:
+    train_ds, val_ds = prepare_datasets(cfg)
+    data_cfg = cfg.get("data", {})
+    batch_size = int(data_cfg.get("batch_size", 8))
+    num_workers = int(data_cfg.get("num_workers", 4))
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=config['data']['batch_size'],
+        train_ds,
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=config['data']['num_workers']
+        num_workers=num_workers,
+        pin_memory=True,
     )
-    
-    # Model
-    model = FusionModel(
-        num_classes=config['model']['num_classes'],
-        visual_dim=config['model']['visual_dim'],
-        skel_dim=config['model']['skel_dim'],
-        embed_dim=config['model']['embed_dim']
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    return train_loader, val_loader, train_ds.num_classes
+
+
+def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimizer: torch.optim.Optimizer, device: torch.device) -> Tuple[float, float]:
+    model.train()
+    total_loss = 0.0
+    total_correct = 0
+    total_samples = 0
+    for batch in loader:
+        clips = batch["clip"].to(device)
+        labels = batch["label"].to(device)
+        optimizer.zero_grad(set_to_none=True)
+        logits, _ = model(clips)
+        loss = criterion(logits, labels)
+        loss.backward()
+        optimizer.step()
+
+        batch_size = clips.shape[0]
+        total_loss += loss.item() * batch_size
+        total_samples += batch_size
+        preds = logits.argmax(dim=1)
+        total_correct += (preds == labels).sum().item()
+    return total_loss / max(1, total_samples), total_correct / max(1, total_samples)
+
+
+def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: torch.device) -> Tuple[float, float]:
+    model.eval()
+    total_loss = 0.0
+    total_correct = 0
+    total_samples = 0
+    with torch.inference_mode():
+        for batch in loader:
+            clips = batch["clip"].to(device)
+            labels = batch["label"].to(device)
+            logits, _ = model(clips)
+            loss = criterion(logits, labels)
+            batch_size = clips.shape[0]
+            total_loss += loss.item() * batch_size
+            total_samples += batch_size
+            preds = logits.argmax(dim=1)
+            total_correct += (preds == labels).sum().item()
+    return total_loss / max(1, total_samples), total_correct / max(1, total_samples)
+
+
+def save_checkpoint(state: Dict[str, Any], output_dir: Path, filename: str) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(state, output_dir / filename)
+
+
+def main(args: argparse.Namespace) -> None:
+    config_path = Path(args.config)
+    cfg = load_config(config_path)
+    train_loader, val_loader, num_classes = build_dataloaders(cfg)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    set_seed(int(cfg.get("experiment", {}).get("seed", 42)))
+
+    model_cfg = cfg.get("model", {})
+    model = GaitRecognitionModel(
+        num_classes=num_classes,
+        in_channels=int(model_cfg.get("in_channels", 1)),
+        frame_feature_dims=tuple(model_cfg.get("frame_feature_dims", [32, 64, 128])),
+        pyramid_bins=tuple(model_cfg.get("pyramid_bins", [1, 2, 4])),
+        dropout=float(model_cfg.get("dropout", 0.3)),
     ).to(device)
-    
-    # Optimizer & Loss
-    optimizer = optim.Adam(model.parameters(), lr=config['train']['lr'], weight_decay=config['train']['weight_decay'])
-    ce_loss = nn.CrossEntropyLoss()
-    triplet_loss = nn.TripletMarginLoss(margin=0.2)
-    
-    # Training Loop
-    for epoch in range(config['train']['epochs']):
-        model.train()
-        total_loss = 0
-        
-        for batch_idx, (imgs, skels, labels) in enumerate(train_loader):
-            imgs, skels, labels = imgs.to(device), skels.to(device), labels.to(device)
-            
-            optimizer.zero_grad()
-            
-            embeds, logits = model(imgs, skels)
-            
-            # Calculate Loss
-            # 1. Cross Entropy Loss
-            loss_ce = ce_loss(logits, labels)
-            
-            # 2. Triplet Loss (Simplified: using batch hard mining or just random triplets)
-            # Here we just use a naive implementation for demonstration. 
-            # In a real scenario, you need a proper Triplet Sampler in DataLoader or Hard Mining here.
-            # For this code to run without complex sampler, we will skip Triplet Loss or use a dummy one
-            # if batch size is small.
-            # Let's assume we rely on CE loss for this basic implementation structure.
-            
-            loss = loss_ce 
-            
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item()
-            
-            if batch_idx % config['train']['log_interval'] == 0:
-                print(f"Epoch [{epoch+1}/{config['train']['epochs']}] Batch [{batch_idx}/{len(train_loader)}] Loss: {loss.item():.4f}")
-                
-        avg_loss = total_loss / len(train_loader)
-        print(f"Epoch [{epoch+1}] Average Loss: {avg_loss:.4f}")
-        
-        # Save Checkpoint
-        if (epoch + 1) % 10 == 0:
-            torch.save(model.state_dict(), os.path.join(config['train']['save_dir'], f'epoch_{epoch+1}.pth'))
+
+    optim_cfg = cfg.get("optim", {})
+    criterion = nn.CrossEntropyLoss(label_smoothing=float(optim_cfg.get("label_smoothing", 0.0)))
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=float(optim_cfg.get("lr", 3e-4)),
+        weight_decay=float(optim_cfg.get("weight_decay", 1e-4)),
+    )
+    epochs = int(args.epochs or optim_cfg.get("epochs", 50))
+
+    output_dir = Path(cfg.get("experiment", {}).get("output_dir", "runs/exp"))
+    history = []
+    best_acc = 0.0
+
+    for epoch in range(1, epochs + 1):
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_loss": val_loss,
+                "val_acc": val_acc,
+            }
+        )
+        print(
+            f"Epoch {epoch:03d} | "
+            f"train_loss={train_loss:.4f} train_acc={train_acc:.3f} "
+            f"val_loss={val_loss:.4f} val_acc={val_acc:.3f}",
+            flush=True,
+        )
+        save_checkpoint(
+            {
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "config": cfg,
+                "metrics": history[-1],
+            },
+            output_dir,
+            "latest.pt",
+        )
+        if val_acc > best_acc:
+            best_acc = val_acc
+            save_checkpoint(
+                {
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "config": cfg,
+                    "metrics": history[-1],
+                },
+                output_dir,
+                "best.pt",
+            )
+
+    with (output_dir / "history.json").open("w", encoding="utf-8") as handle:
+        json.dump(history, handle, indent=2)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='config/config.yaml', help='Path to config file')
-    args = parser.parse_args()
-    
-    train(args.config)
+    parser = argparse.ArgumentParser(description="Train a GaitSet-inspired model on CASIA-B silhouettes.")
+    parser.add_argument("--config", type=str, default="config/config.yaml", help="Path to YAML config file.")
+    parser.add_argument("--epochs", type=int, default=None, help="Override number of training epochs.")
+    cli_args = parser.parse_args()
+    main(cli_args)

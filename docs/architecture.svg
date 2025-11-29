@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="960" height="320" viewBox="0 0 960 320" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font: bold 20px sans-serif; fill: #102a43; }
+      .label { font: 16px sans-serif; fill: #102a43; }
+      .box { fill: #d5e4f3; stroke: #24527a; stroke-width: 2; rx: 12; ry: 12; }
+      .arrow { stroke: #24527a; stroke-width: 2; marker-end: url(#arrowhead); }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#24527a" />
+    </marker>
+  </defs>
+  <text class="title" x="320" y="36">CASIA-B Silhouette Gait Pipeline</text>
+  <rect class="box" x="40" y="90" width="180" height="120" />
+  <text class="label" x="70" y="140">
+    <tspan x="70" dy="0">Silhouette</tspan>
+    <tspan x="70" dy="24">Sequence</tspan>
+  </text>
+  <rect class="box" x="260" y="90" width="200" height="120" />
+  <text class="label" x="280" y="120">
+    <tspan x="280" dy="0">Frame Encoder</tspan>
+    <tspan x="280" dy="24">3x3 Conv + BN + ReLU</tspan>
+    <tspan x="280" dy="24">2x2 Down-sampling</tspan>
+  </text>
+  <rect class="box" x="500" y="90" width="200" height="120" />
+  <text class="label" x="520" y="130">
+    <tspan x="520" dy="0">Set Pooling</tspan>
+    <tspan x="520" dy="24">Mean + Max + TPP</tspan>
+  </text>
+  <rect class="box" x="740" y="90" width="180" height="120" />
+  <text class="label" x="760" y="140">
+    <tspan x="760" dy="0">Classifier</tspan>
+    <tspan x="760" dy="24">Linear + Softmax</tspan>
+  </text>
+  <line class="arrow" x1="220" y1="150" x2="260" y2="150" />
+  <line class="arrow" x1="460" y1="150" x2="500" y2="150" />
+  <line class="arrow" x1="700" y1="150" x2="740" y2="150" />
+</svg>
