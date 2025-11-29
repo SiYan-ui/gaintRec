@@ -2,3 +2,6 @@ prompt/
 
 *.pyc
 __pycache__/
+
+# Ignore data files
+data/
