@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -95,6 +97,10 @@ def train_one_epoch(
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
+    
+    start_time = time.time()
+    num_batches = len(loader)
+    
     for i, batch in enumerate(loader):
         clips = batch["clip"].to(device)
         labels = batch["label"].to(device)
@@ -113,7 +119,27 @@ def train_one_epoch(
         if writer is not None:
             global_step = (epoch - 1) * len(loader) + i
             writer.add_scalar("Train/BatchLoss", loss.item(), global_step)
+            
+        # Calculate speed and ETA every 10 batches or at the end
+        if (i + 1) % 10 == 0 or (i + 1) == num_batches:
+            elapsed = time.time() - start_time
+            samples_per_sec = total_samples / elapsed
+            batches_done = i + 1
+            batches_left = num_batches - batches_done
+            time_per_batch = elapsed / batches_done
+            eta_seconds = batches_left * time_per_batch
+            eta_str = str(timedelta(seconds=int(eta_seconds)))
+            
+            print(
+                f"\rEpoch {epoch} [{batches_done}/{num_batches}] "
+                f"Loss: {loss.item():.4f} "
+                f"Speed: {samples_per_sec:.1f} samples/s "
+                f"ETA: {eta_str}",
+                end="",
+                flush=True
+            )
 
+    print() # Newline after epoch
     return total_loss / max(1, total_samples), total_correct / max(1, total_samples)
 
 
@@ -173,10 +199,19 @@ def main(args: argparse.Namespace) -> None:
 
     # Initialize TensorBoard writer
     writer = SummaryWriter(log_dir=str(output_dir / "tensorboard"))
+    
+    total_start_time = time.time()
 
     for epoch in range(1, epochs + 1):
+        epoch_start = time.time()
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, epoch, writer)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        
+        epoch_duration = time.time() - epoch_start
+        total_elapsed = time.time() - total_start_time
+        avg_epoch_time = total_elapsed / epoch
+        epochs_left = epochs - epoch
+        total_eta = str(timedelta(seconds=int(epochs_left * avg_epoch_time)))
         
         # Log epoch metrics
         writer.add_scalar("Train/Loss", train_loss, epoch)
@@ -191,12 +226,15 @@ def main(args: argparse.Namespace) -> None:
                 "train_acc": train_acc,
                 "val_loss": val_loss,
                 "val_acc": val_acc,
+                "epoch_time": epoch_duration,
             }
         )
         print(
-            f"Epoch {epoch:03d} | "
+            f"Epoch {epoch:03d} Summary | "
             f"train_loss={train_loss:.4f} train_acc={train_acc:.3f} "
-            f"val_loss={val_loss:.4f} val_acc={val_acc:.3f}",
+            f"val_loss={val_loss:.4f} val_acc={val_acc:.3f} | "
+            f"Time: {str(timedelta(seconds=int(epoch_duration)))} "
+            f"Total ETA: {total_eta}",
             flush=True,
         )
         save_checkpoint(
