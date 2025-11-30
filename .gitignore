@@ -5,3 +5,6 @@ __pycache__/
 
 # Ignore data files
 data/
+
+# Ignore model checkpoints and outputs
+runs/

@@ -1,0 +1,26 @@
+
+experiment:
+  seed: 2025    # 随机数种子
+  output_dir: runs/casia-b-1  # 输出目录
+
+data:
+  root: data/GaitDatasetB-silh  # 数据集根目录
+  train_ratio: 0.85     # 训练集比例
+  split_seed: 7         # 数据划分随机种子
+  frames_per_clip: 80   # 每个剪辑的帧数
+  min_frames: 8       # 最小帧数
+  sampling_strategy: uniform  # 采样策略
+  batch_size: 8       # 批量大小
+  num_workers: 4      # 工作线程数
+
+model:
+  in_channels: 1  # 输入通道数
+  frame_feature_dims: [128, 512, 256, 128]  # 帧特征维度
+  pyramid_bins: [1, 2, 4]  # 金字塔分箱数
+  dropout: 0.3  # Dropout率
+
+optim:
+  lr: 0.0003            # 学习率
+  weight_decay: 0.00001  # 权重衰减
+  epochs: 300            # 训练轮数
+  label_smoothing: 0.0  # 标签平滑

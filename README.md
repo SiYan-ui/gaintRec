@@ -21,6 +21,8 @@ config/config.yaml        # 训练超参与数据配置
 src/data/casia_b.py       # CASIA-B 数据集读取、划分工具
 src/model/gaitset.py      # Silhouette 编码器 + Set Pooling + 分类头
 src/train.py              # 训练/验证循环、日志与 checkpoint
+src/inference.py          # 单样本推理脚本
+src/evaluate.py           # 验证集评估脚本 (Accuracy, Recall, F1)
 src/utility/unzip_dataset.py # 数据解压小工具
 README.md                 # 使用说明
 docs/architecture.svg     # 模型结构示意图
@@ -30,7 +32,7 @@ docs/architecture.svg     # 模型结构示意图
 ```bash
 python -m venv .venv && source .venv/bin/activate  # 推荐
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121  # 按需选择CUDA/CPU版本
-pip install pyyaml pillow
+pip install pyyaml pillow scikit-learn tensorboard
 ```
 > 若需批量解压数据，可运行 `python -m src.utility.unzip_dataset --data-dir data/raw_archives`。
 
@@ -81,6 +83,46 @@ python -m src.train --config config/config.yaml
 - `latest.pt`：最近一次 checkpoint
 - `best.pt`：验证精度最佳模型
 - `history.json`：训练/验证曲线数据
+- `tensorboard/`：TensorBoard 日志
+
+### 查看 TensorBoard 日志
+```bash
+tensorboard --logdir runs/casia-b-baseline/tensorboard
+```
+然后在浏览器访问 `http://localhost:6006`。
+
+## 推理 (Inference)
+对单个包含轮廓序列的文件夹进行推理：
+```bash
+python -m src.inference \
+  --config config/config.yaml \
+  --checkpoint runs/casia-b-baseline/best.pt \
+  --input_dir data/GaitDatasetB-silh/001/nm-01/090
+```
+脚本将输出预测的类别索引（对应 Subject ID）。
+
+## 评估 (Evaluation)
+在验证集上计算详细指标（Accuracy, Recall, F1-Score）：
+```bash
+python -m src.evaluate \
+  --config config/config.yaml \
+  --checkpoint runs/casia-b-baseline/best.pt
+```
+输出示例：
+```text
+Classification Report:
+              precision    recall  f1-score   support
+           0       0.95      0.90      0.92        20
+           ...
+    accuracy                           0.92       200
+   macro avg       0.91      0.90      0.90       200
+weighted avg       0.92      0.92      0.92       200
+
+Evaluation Results:
+Accuracy: 0.9200
+Recall:   0.9000
+F1 Score: 0.9000
+```
 
 ## 调参与扩展
 - 修改 `model.frame_feature_dims` 可以加深/加宽卷积骨干。

@@ -12,6 +12,7 @@ import torch
 import yaml
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from src.data import CasiaBSilhouetteDataset, build_subject_label_map, discover_subject_ids, split_subjects
 from src.model import GaitRecognitionModel
@@ -81,12 +82,20 @@ def build_dataloaders(cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, int]
     return train_loader, val_loader, train_ds.num_classes
 
 
-def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimizer: torch.optim.Optimizer, device: torch.device) -> Tuple[float, float]:
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    epoch: int,
+    writer: SummaryWriter | None = None,
+) -> Tuple[float, float]:
     model.train()
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
-    for batch in loader:
+    for i, batch in enumerate(loader):
         clips = batch["clip"].to(device)
         labels = batch["label"].to(device)
         optimizer.zero_grad(set_to_none=True)
@@ -100,6 +109,11 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, 
         total_samples += batch_size
         preds = logits.argmax(dim=1)
         total_correct += (preds == labels).sum().item()
+
+        if writer is not None:
+            global_step = (epoch - 1) * len(loader) + i
+            writer.add_scalar("Train/BatchLoss", loss.item(), global_step)
+
     return total_loss / max(1, total_samples), total_correct / max(1, total_samples)
 
 
@@ -157,9 +171,19 @@ def main(args: argparse.Namespace) -> None:
     history = []
     best_acc = 0.0
 
+    # Initialize TensorBoard writer
+    writer = SummaryWriter(log_dir=str(output_dir / "tensorboard"))
+
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, epoch, writer)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        
+        # Log epoch metrics
+        writer.add_scalar("Train/Loss", train_loss, epoch)
+        writer.add_scalar("Train/Accuracy", train_acc, epoch)
+        writer.add_scalar("Val/Loss", val_loss, epoch)
+        writer.add_scalar("Val/Accuracy", val_acc, epoch)
+
         history.append(
             {
                 "epoch": epoch,
@@ -202,6 +226,8 @@ def main(args: argparse.Namespace) -> None:
 
     with (output_dir / "history.json").open("w", encoding="utf-8") as handle:
         json.dump(history, handle, indent=2)
+    
+    writer.close()
 
 
 if __name__ == "__main__":
