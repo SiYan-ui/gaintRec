@@ -1,4 +1,4 @@
-prompt/
+# prompt/
 
 *.pyc
 __pycache__/
