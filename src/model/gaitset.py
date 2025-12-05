@@ -24,6 +24,36 @@ class ConvBNRelu(nn.Module):
         return self.block(x)
 
 
+class TemporalDifferencer(nn.Module):
+    """
+    Computes temporal difference between frames.
+    Input A: (B, T, C, H, W)
+    Output C = A - B, where B is A shifted by 1 frame (with zero padding at start).
+    """
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, C, H, W)
+        if x.ndim != 5:
+            raise ValueError(f"TemporalDifferencer expects 5D input (B, T, C, H, W), got {x.shape}")
+        
+        b, t, c, h, w = x.shape
+        
+        # Create B: Shifted version of A
+        # Remove last frame, prepend zero frame
+        # x[:, :-1] is (B, T-1, C, H, W)
+        # zero_frame is (B, 1, C, H, W)
+        
+        zero_frame = torch.zeros((b, 1, c, h, w), dtype=x.dtype, device=x.device)
+        shifted_x = torch.cat([zero_frame, x[:, :-1]], dim=1)
+        
+        # C = A - B
+        diff = x - shifted_x
+        
+        return diff
+
+
 class GaitSetBackbone(nn.Module):
     """Frame encoder for silhouette sequences."""
 
@@ -81,6 +111,7 @@ class GaitRecognitionModel(nn.Module):
         dropout: float = 0.3,
     ) -> None:
         super().__init__()
+        self.temporal_diff = TemporalDifferencer()
         self.backbone = GaitSetBackbone(in_channels=in_channels, feature_dims=frame_feature_dims)
         self.pool = SetPooling(self.backbone.output_dim, pyramid_bins=pyramid_bins)
         self.embedding_dim = self.pool.output_dim
@@ -89,7 +120,8 @@ class GaitRecognitionModel(nn.Module):
 
     def forward(self, clip: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Return logits and pooled embeddings for an input clip shaped (B, T, C, H, W)."""
-        frame_features = self.backbone(clip)
+        diff_clip = self.temporal_diff(clip)
+        frame_features = self.backbone(diff_clip)
         embedding = self.pool(frame_features)
         logits = self.classifier(self.dropout(embedding))
         return logits, embedding
