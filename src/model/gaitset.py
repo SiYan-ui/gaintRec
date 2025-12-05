@@ -43,8 +43,8 @@ class GaitSetBackbone(nn.Module):
         b, t, c, h, w = clip.shape
         x = clip.view(b * t, c, h, w)
         x = self.body(x)
-        x = F.adaptive_avg_pool2d(x, 1)
-        x = x.view(b, t, self.output_dim)
+        x = F.adaptive_avg_pool2d(x, 1)     # (B*T, D, 1, 1)
+        x = x.view(b, t, self.output_dim)   # (B, T, D)
         return x
 
 
@@ -61,10 +61,10 @@ class SetPooling(nn.Module):
         """Aggregate features shaped (B, T, D) into a single embedding."""
         if features.ndim != 3:
             raise ValueError("SetPooling expects a tensor shaped (B, T, D)")
-        pooled = [features.mean(dim=1), features.max(dim=1).values]
-        temporal = features.transpose(1, 2)  # (B, D, T)
+        pooled = [features.mean(dim=1), features.max(dim=1).values] # (B, D) each，T被pool掉了
+        temporal = features.transpose(1, 2)  # (B, D, T)，第 1 维和第 2 维互换
         for bins in self.pyramid_bins:
-            pooled_bins = F.adaptive_avg_pool1d(temporal, output_size=bins)
+            pooled_bins = F.adaptive_avg_pool1d(temporal, output_size=bins) # (B, D, bins)
             pooled.append(pooled_bins.transpose(1, 2).reshape(features.size(0), -1))
         return torch.cat(pooled, dim=1)
 
