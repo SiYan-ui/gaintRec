@@ -30,8 +30,17 @@ class TemporalDifferencer(nn.Module):
     Input A: (B, T, C, H, W)
     Output C = A - B, where B is A shifted by 1 frame (with zero padding at start).
     """
-    def __init__(self) -> None:
+    def __init__(self, in_channels: int, diff_size: int, stride: int) -> None:
         super().__init__()
+        self.in_channels = in_channels
+        self.diff_size = diff_size
+        self.stride = stride
+        self.output_dim = in_channels * ((diff_size - 1) // stride + 1)
+        self.block = nn.Sequential(
+            nn.Linear(self.output_dim, self.output_dim, kernel_size=1, bias=True),
+            nn.LeakyReLU(inplace=True, negative_slope=0.5)
+        )
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, T, C, H, W)
@@ -44,14 +53,18 @@ class TemporalDifferencer(nn.Module):
         # Remove last frame, prepend zero frame
         # x[:, :-1] is (B, T-1, C, H, W)
         # zero_frame is (B, 1, C, H, W)
-        
-        zero_frame = torch.zeros((b, 1, c, h, w), dtype=x.dtype, device=x.device)
-        shifted_x = torch.cat([zero_frame, x[:, :-1]], dim=1)
-        
-        # C = A - B
-        diff = x - shifted_x
-        
-        return diff
+        for shift_num in range(1, self.diff_size, self.stride):
+            zero_frame = torch.zeros((b, shift_num, c, h, w), dtype=x.dtype, device=x.device)
+            shifted_x = torch.cat([zero_frame, x[:, :-shift_num]], dim=1)
+            # C = A - B
+            diff = x - shifted_x
+            if shift_num == 1:
+                all_diffs = diff
+            else:
+                all_diffs = torch.cat([all_diffs, diff], dim=2)  # Concatenate along channel dimension
+
+        return all_diffs
+
 
 
 class GaitSetBackbone(nn.Module):
@@ -95,7 +108,7 @@ class SetPooling(nn.Module):
         temporal = features.transpose(1, 2)  # (B, D, T)，第 1 维和第 2 维互换
         for bins in self.pyramid_bins:
             pooled_bins = F.adaptive_avg_pool1d(temporal, output_size=bins) # (B, D, bins)
-            pooled.append(pooled_bins.transpose(1, 2).reshape(features.size(0), -1))
+            pooled.append(pooled_bins.transpose(1, 2).reshape(features.size(0), -1))    # (B, D * bins)
         return torch.cat(pooled, dim=1)
 
 
@@ -111,8 +124,8 @@ class GaitRecognitionModel(nn.Module):
         dropout: float = 0.3,
     ) -> None:
         super().__init__()
-        self.temporal_diff = TemporalDifferencer()
-        self.backbone = GaitSetBackbone(in_channels=in_channels, feature_dims=frame_feature_dims)
+        self.temporal_diff = TemporalDifferencer(in_channels=in_channels, diff_size=3, stride=1)
+        self.backbone = GaitSetBackbone(in_channels=self.temporal_diff.output_dim, feature_dims=frame_feature_dims)
         self.pool = SetPooling(self.backbone.output_dim, pyramid_bins=pyramid_bins)
         self.embedding_dim = self.pool.output_dim
         self.dropout = nn.Dropout(dropout)
