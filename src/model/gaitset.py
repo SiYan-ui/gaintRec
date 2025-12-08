@@ -26,6 +26,7 @@ class ConvBNRelu(nn.Module):
 
 class TemporalDifferencer(nn.Module):
     """
+    多尺度时序差分器
     Computes temporal difference between frames.
     Input A: (B, T, C, H, W)
     Output C = A - B, where B is A shifted by 1 frame (with zero padding at start).
